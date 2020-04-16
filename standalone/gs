@@ -23,7 +23,7 @@ SERVICE_FQDN_GRPC="127.0.0.1"
 # Variables to configure route
 ROUTE_NAME="gs_route"
 ROUTE_PREFIX="/"
-GRPC_ROUTE_NAME="echo_HelloWorld"
+GRPC_ROUTE_NAME="gs_route"
 GRPC_ROUTE_PREFIX="/echo/HelloWorld"
 
 # Variables to configure upstream
@@ -50,6 +50,57 @@ SECRET_NAME="enroute.local"
 SECRET_KEY_FILE="enroute.local.key"
 SECRET_CERT_FILE="enroute.local.cert"
 
+# Variables for route rate-limit filter
+RL_FILTER_NAME="route_rl_filter"
+RL_FILTER_TYPE="route_filter_ratelimit"
+RL_FILTER_CONFIG='
+	{
+	  "descriptors" :
+	  [
+	    {
+	      "generic_key":
+	      {
+	        "descriptor_value":"default"
+	      }
+	    }
+	  ]
+	}
+'
+
+# Variables for lua global filter
+LUA_FILTER_NAME="global_lua_filter"
+LUA_FILTER_TYPE="http_filter_lua"
+LUA_SCRIPT='
+  function envoy_on_request(request_handle)
+      request_handle:logInfo("Hello World request")
+  end
+
+  function envoy_on_response(response_handle)
+    response_handle:logInfo("Hello World response")
+  end
+'
+
+# Variables for global config
+GLOBALCONFIG_NAME="gc"
+GLOBALCONFIG_TYPE="globalconfig_ratelimit"
+GLOBAL_CONFIG='
+	{
+	  "domain": "enroute",
+	  "descriptors" :
+	  [
+	    {
+	      "key" : "generic_key",
+	      "value" : "default",
+	      "rate_limit" :
+	      {
+	        "unit" : "second",
+	        "requests_per_unit" : 10
+	      }
+	    }
+	  ]
+	}
+'
+
 log() {
     TIMESTAMP=$(date -u "+%Y-%m-%dT%H:%M:%S.000+0000")
     MESSAGE=$1
@@ -58,50 +109,50 @@ log() {
 
 create_key_cert() {
 
-	local LOCAL_CN=$1
-	local LOCAL_KEY_FILE=$2
-	local LOCAL_CERT_FILE=$3
+    local LOCAL_CN=$1
+    local LOCAL_KEY_FILE=$2
+    local LOCAL_CERT_FILE=$3
 
-	cn=$LOCAL_CN
+    cn=$LOCAL_CN
 
-	openssl req -new -newkey rsa:2048 -days 36500 -nodes -x509 \
-	    -subj "/C=US/ST=Denial/L=Springfield/O=Dis/CN=$cn" \
-	    -keyout $LOCAL_KEY_FILE -out $LOCAL_CERT_FILE
-	
-	openssl x509 -in $cn.cert -text -noout
+    openssl req -new -newkey rsa:2048 -days 36500 -nodes -x509 \
+        -subj "/C=US/ST=Denial/L=Springfield/O=Dis/CN=$cn" \
+        -keyout $LOCAL_KEY_FILE -out $LOCAL_CERT_FILE
+    
+    openssl x509 -in $cn.cert -text -noout
 }
 
 send_traffic() {
-	local LOCAL_SERVICE_FQDN=$1
+    local LOCAL_SERVICE_FQDN=$1
     curl -k -vvv https://${LOCAL_SERVICE_FQDN}:8443 --resolve ${LOCAL_SERVICE_FQDN}:8443:127.0.0.1
 }
 
 send_traffic_http() {
-	local LOCAL_SERVICE_FQDN=$1
+    local LOCAL_SERVICE_FQDN=$1
     curl -vvv http://${LOCAL_SERVICE_FQDN}:8080 --resolve ${LOCAL_SERVICE_FQDN}:8080:127.0.0.1
 }
 
 create_upstream() {
-	local LOCAL_ADMIN_HOST_URL=$1
-	local LOCAL_UPSTREAM_NAME=$2
-	local LOCAL_UPSTREAM_IP=$3
-	local LOCAL_UPSTREAM_PORT=${4}
-	local LOCAL_UPSTREAM_WEIGHT=${5}
-	local LOCAL_UPSTREAM_HC_PATH=${6}
+    local LOCAL_ADMIN_HOST_URL=$1
+    local LOCAL_UPSTREAM_NAME=$2
+    local LOCAL_UPSTREAM_IP=$3
+    local LOCAL_UPSTREAM_PORT=${4}
+    local LOCAL_UPSTREAM_WEIGHT=${5}
+    local LOCAL_UPSTREAM_HC_PATH=${6}
     local LOCAL_UPSTREAM_IS_GRPC=${7}
 
     if [ ${LOCAL_UPSTREAM_IS_GRPC} = "grpc" ]
     then
-    	curl -s -X POST ${LOCAL_ADMIN_HOST_URL}/upstream \
-    	    -d "Upstream_name"="${LOCAL_UPSTREAM_NAME}" \
+        curl -s -X POST ${LOCAL_ADMIN_HOST_URL}/upstream \
+            -d "Upstream_name"="${LOCAL_UPSTREAM_NAME}" \
             -d "Upstream_ip"="${LOCAL_UPSTREAM_IP}" \
             -d "upstream_port"="${LOCAL_UPSTREAM_PORT}" \
             -d "Upstream_hc_path"="${LOCAL_UPSTREAM_HC_PATH}" \
             -d "Upstream_protocol=grpc" \
             -d "Upstream_weight"="${LOCAL_UPSTREAM_WEIGHT}" | ${PIPE_TO}
     else
-    	curl -s -X POST ${LOCAL_ADMIN_HOST_URL}/upstream \
-    	    -d "Upstream_name"="${LOCAL_UPSTREAM_NAME}" \
+        curl -s -X POST ${LOCAL_ADMIN_HOST_URL}/upstream \
+            -d "Upstream_name"="${LOCAL_UPSTREAM_NAME}" \
             -d "Upstream_ip"="${LOCAL_UPSTREAM_IP}" \
             -d "upstream_port"="${LOCAL_UPSTREAM_PORT}" \
             -d "Upstream_hc_path"="${LOCAL_UPSTREAM_HC_PATH}" \
@@ -110,187 +161,359 @@ create_upstream() {
 }
 
 create_proxy() {
-	local LOCAL_ADMIN_HOST_URL=$1
-	local LOCAL_PROXY_NAME=$2
+    local LOCAL_ADMIN_HOST_URL=$1
+    local LOCAL_PROXY_NAME=$2
 
-	curl -s -X POST ${LOCAL_ADMIN_HOST_URL}/proxy \
+    curl -s -X POST ${LOCAL_ADMIN_HOST_URL}/proxy \
         -d "Name"-"${LOCAL_PROXY_NAME}" | ${PIPE_TO}
 }
 
 create_service() {
 
-	local LOCAL_ADMIN_HOST_URL=$1
-	local LOCAL_SERVICE_NAME=$2
-	local LOCAL_SERVICE_FQDN=$3
+    local LOCAL_ADMIN_HOST_URL=$1
+    local LOCAL_SERVICE_NAME=$2
+    local LOCAL_SERVICE_FQDN=$3
 
-	curl -s -X POST ${LOCAL_ADMIN_HOST_URL}/service \
-		-d "Service_Name"="${LOCAL_SERVICE_NAME}"   \
+    curl -s -X POST ${LOCAL_ADMIN_HOST_URL}/service \
+        -d "Service_Name"="${LOCAL_SERVICE_NAME}"   \
         -d "fqdn"="${LOCAL_SERVICE_FQDN}" | ${PIPE_TO}
 }
 
 create_route() {
 
-	local LOCAL_ADMIN_HOST_URL=$1
-	local LOCAL_SERVICE_NAME=$2
-	local LOCAL_ROUTE_NAME=$3
-	local LOCAL_ROUTE_PREFIX=$4
+    local LOCAL_ADMIN_HOST_URL=$1
+    local LOCAL_SERVICE_NAME=$2
+    local LOCAL_ROUTE_NAME=$3
+    local LOCAL_ROUTE_PREFIX=$4
 
     echo "Received ${LOCAL_ADMIN_HOST_URL} ${LOCAL_SERVICE_NAME} ${LOCAL_ROUTE_NAME} ${LOCAL_ROUTE_PREFIX}"
 
-	curl -s -X POST ${LOCAL_ADMIN_HOST_URL}/service/${LOCAL_SERVICE_NAME}/route \
-		-d "Route_Name"="${LOCAL_ROUTE_NAME}"                                   \
+    curl -s -X POST ${LOCAL_ADMIN_HOST_URL}/service/${LOCAL_SERVICE_NAME}/route \
+        -d "Route_Name"="${LOCAL_ROUTE_NAME}"                                   \
         -d "Route_prefix"="${LOCAL_ROUTE_PREFIX}" | ${PIPE_TO}
+}
+
+create_route_rl_filter() {
+
+    local LOCAL_ADMIN_HOST_URL=$1
+    local LOCAL_SERIVCE_NAME=$2
+    local LOCAL_ROUTE_NAME=$3
+    local LOCAL_FILTER_NAME=$4
+    local LOCAL_FILTER_TYPE=$5
+    local LOCAL_FILTER_CONFIG="$6"
+
+    # we need to pass quoted multi-line text to command
+    #FILTER_ARG=$(printf '%s' ${LOCAL_FILTER_CONFIG})
+    #echo "Filter Config ${LOCAL_FILTER_CONFIG} -- ${FILTER_ARG} --"
+
+    # Create filter
+    curl -s -X POST ${LOCAL_ADMIN_HOST_URL}/filter  \
+        -d "Filter_name=${LOCAL_FILTER_NAME}"       \
+        -d "Filter_type=${LOCAL_FILTER_TYPE}"       \
+        -d "Filter_config"="${LOCAL_FILTER_CONFIG}" | ${PIPE_TO}
+
+}
+
+attach_route_filter() {
+
+    local LOCAL_ADMIN_HOST_URL=$1
+    local LOCAL_SERVICE_NAME=$2
+    local LOCAL_ROUTE_NAME=$3
+    local LOCAL_FILTER_NAME=$4
+
+    # Attach filter to route
+    curl -s -X POST ${LOCAL_ADMIN_HOST_URL}/service/${LOCAL_SERVICE_NAME}/route/${LOCAL_ROUTE_NAME}/filter/${LOCAL_FILTER_NAME} | ${PIPE_TO}
+}
+
+detach_route_filter() {
+    local LOCAL_ADMIN_HOST_URL=$1
+    local LOCAL_SERVICE_NAME=$2
+    local LOCAL_ROUTE_NAME=$3
+    local LOCAL_FILTER_NAME=$4
+
+    # Attach filter to route
+    curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/service/${LOCAL_SERVICE_NAME}/route/${LOCAL_ROUTE_NAME}/filter/${LOCAL_FILTER_NAME} | ${PIPE_TO}
+}
+
+delete_route_filter() {
+
+    local LOCAL_ADMIN_HOST_URL=$1
+    local LOCAL_SERIVCE_NAME=$2
+    local LOCAL_ROUTE_NAME=$3
+    local LOCAL_FILTER_NAME=$4
+
+    # Delete route to filter association
+    curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/service/${LOCAL_SERVICE_NAME}/route/${LOCAL_ROUTE_NAME}/filter/${LOCAL_FILTER_NAME} | ${PIPE_TO}
+    curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/filter/${LOCAL_FILTER_NAME} | ${PIPE_TO}
+}
+
+show_filter() {
+    local LOCAL_ADMIN_HOST_URL=$1
+    local LOCAL_FILTER_NAME=$2
+
+    # Create filter
+    curl -s ${LOCAL_ADMIN_HOST_URL}/filter/${LOCAL_FILTER_NAME} | ${PIPE_TO}
+}
+
+show_globalconfig() {
+    local LOCAL_ADMIN_HOST_URL=$1
+    local LOCAL_GLOBALCONFIG_NAME=$2
+
+    # Create filter
+    curl -s ${LOCAL_ADMIN_HOST_URL}/globalconfig/${LOCAL_GLOBALCONFIG_NAME} | ${PIPE_TO}
+}
+
+
+create_global_lua_filter() {
+
+    local LOCAL_ADMIN_HOST_URL=$1
+    local LOCAL_SERVICE_NAME=$2
+    local LOCAL_FILTER_NAME=$3
+    local LOCAL_FILTER_TYPE=$4
+    local LOCAL_FILTER_CONFIG="$5"
+
+    echo ${LOCAL_FILTER_CONFIG}
+
+    FILTER_ARG=$(printf "%s " ${LOCAL_FILTER_CONFIG})
+    echo ${FILTER_ARG}
+
+    curl -s -X POST ${LOCAL_ADMIN_HOST_URL}/filter   \
+        -d "Filter_name=${LOCAL_FILTER_NAME}"        \
+        -d "Filter_type=${LOCAL_FILTER_TYPE}"        \
+        -d "Filter_config"="${FILTER_ARG}" | jq
+
+    curl -s ${LOCAL_ADMIN_HOST_URL}/filter/${LOCAL_FILTER_NAME} | ${PIPE_TO}
+}
+
+attach_global_filter() {
+
+    local LOCAL_ADMIN_HOST_URL=$1
+    local LOCAL_SERVICE_NAME=$2
+    local LOCAL_FILTER_NAME=$3
+
+    curl -s -X POST ${LOCAL_ADMIN_HOST_URL}/service/${LOCAL_SERVICE_NAME}/filter/${LOCAL_FILTER_NAME} | ${PIPE_TO}
+}
+
+detach_global_filter() {
+    local LOCAL_ADMIN_HOST_URL=$1
+    local LOCAL_SERVICE_NAME=$2
+    local LOCAL_FILTER_NAME=$3
+
+    curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/service/${LOCAL_SERVICE_NAME}/filter/${LOCAL_FILTER_NAME} | ${PIPE_TO}
+}
+
+delete_global_filter() {
+    local LOCAL_ADMIN_HOST_URL=$1
+    local LOCAL_SERVICE_NAME=$2
+    local LOCAL_FILTER_NAME=$3
+
+    curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/filter/${LOCAL_FILTER_NAME} | ${PIPE_TO}
+}
+
+create_global_config() {
+
+    local LOCAL_ADMIN_HOST_URL=$1
+    local LOCAL_SERVICE_NAME=$2
+    local LOCAL_GLOBALCONFIG_NAME=$3
+    local LOCAL_GLOBALCONFIG_TYPE=$4
+    local LOCAL_GLOBALCONFIG_CONFIG="$5"
+
+
+    GLOBALCONFIG_ARG=$(printf "%s " ${LOCAL_GLOBALCONFIG_CONFIG})
+
+    curl -s -X POST ${LOCAL_ADMIN_HOST_URL}/globalconfig \
+        -d "globalconfig_name=${GLOBALCONFIG_NAME}"      \
+        -d "globalconfig_type=${GLOBALCONFIG_TYPE}"      \
+        -d "config=${GLOBALCONFIG_ARG}" | jq
+
+}
+
+show_globalconfig() {
+    local LOCAL_ADMIN_HOST_URL=$1
+    local LOCAL_GLOBALCONFIG_NAME=$2
+
+
+    curl -s ${LOCAL_ADMIN_HOST_URL}/globalconfig/${LOCAL_GLOBALCONFIG_NAME} | ${PIPE_TO}
+}
+
+attach_globalconfig() {
+
+    local LOCAL_ADMIN_HOST_URL=$1
+    local LOCAL_GLOBALCONFIG_NAME=$2
+
+    echo "curl -s -X POST ${LOCAL_ADMIN_HOST_URL}/proxy/gw/globalconfig/${LOCAL_GLOBALCONFIG_NAME} | ${PIPE_TO}"
+    curl -s -X POST ${LOCAL_ADMIN_HOST_URL}/proxy/gw/globalconfig/${LOCAL_GLOBALCONFIG_NAME} | ${PIPE_TO}
+}
+
+detach_globalconfig() {
+
+    local LOCAL_ADMIN_HOST_URL=$1
+    local LOCAL_GLOBALCONFIG_NAME=$2
+
+    curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/proxy/gw/globalconfig/${LOCAL_GLOBALCONFIG_NAME} | ${PIPE_TO}
+}
+
+delete_globalconfig() {
+
+    local LOCAL_ADMIN_HOST_URL=$1
+    local LOCAL_GLOBALCONFIG_NAME=$2
+
+    curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/globalconfig/${LOCAL_GLOBALCONFIG_NAME} | ${PIPE_TO}
+}
+
+delete_global_config() {
+    curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/service/${LOCAL_SERVICE_NAME}/globalconfig/${LOCAL_GLOBALCONFIG_NAME} | ${PIPE_TO}
+    curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/globalconfig/${LOCAL_GLOBALCONFIG_NAME} | ${PIPE_TO}
 }
 
 create_and_associate_upstream() {
 
-	local LOCAL_ADMIN_HOST_URL=$1
-	local LOCAL_UPSTREAM_NAME=$2
-	local LOCAL_UPSTREAM_IP=$3
-	local LOCAL_UPSTREAM_PORT=${4}
-	local LOCAL_UPSTREAM_WEIGHT=${5}
-	local LOCAL_UPSTREAM_HC_PATH=${6}
+    local LOCAL_ADMIN_HOST_URL=$1
+    local LOCAL_UPSTREAM_NAME=$2
+    local LOCAL_UPSTREAM_IP=$3
+    local LOCAL_UPSTREAM_PORT=${4}
+    local LOCAL_UPSTREAM_WEIGHT=${5}
+    local LOCAL_UPSTREAM_HC_PATH=${6}
     local LOCAL_SERVICE_NAME=${7}
     local LOCAL_ROUTE_NAME=${8}
     local LOCAL_UPSTREAM_IS_GRPC=${9}
 
     create_upstream ${LOCAL_ADMIN_HOST_URL} ${LOCAL_UPSTREAM_NAME} ${LOCAL_UPSTREAM_IP} ${LOCAL_UPSTREAM_PORT} ${LOCAL_UPSTREAM_WEIGHT} ${LOCAL_UPSTREAM_HC_PATH} ${LOCAL_UPSTREAM_IS_GRPC}
 
-	curl -s -X POST ${LOCAL_ADMIN_HOST_URL}/service/${LOCAL_SERVICE_NAME}/route/${LOCAL_ROUTE_NAME}/upstream/${LOCAL_UPSTREAM_NAME} | ${PIPE_TO}
+    curl -s -X POST ${LOCAL_ADMIN_HOST_URL}/service/${LOCAL_SERVICE_NAME}/route/${LOCAL_ROUTE_NAME}/upstream/${LOCAL_UPSTREAM_NAME} | ${PIPE_TO}
 }
 
 create_service_route_upstream() {
 
-	local LOCAL_ADMIN_HOST_URL=$1
-	local LOCAL_PROXY_NAME=$2
-	local LOCAL_SERVICE_NAME=$3
-	local LOCAL_SERVICE_FQDN=$4
-	local LOCAL_ROUTE_NAME=$5
-	local LOCAL_ROUTE_PREFIX=$6
-	local LOCAL_UPSTREAM_NAME=$7
-	local LOCAL_UPSTREAM_IP=$8
-	local LOCAL_UPSTREAM_PORT=${9}
-	local LOCAL_UPSTREAM_WEIGHT=${10}
-	local LOCAL_UPSTREAM_HC_PATH=${11}
-	local LOCAL_UPSTREAM_IS_GRPC=${12}
+    local LOCAL_ADMIN_HOST_URL=$1
+    local LOCAL_PROXY_NAME=$2
+    local LOCAL_SERVICE_NAME=$3
+    local LOCAL_SERVICE_FQDN=$4
+    local LOCAL_ROUTE_NAME=$5
+    local LOCAL_ROUTE_PREFIX=$6
+    local LOCAL_UPSTREAM_NAME=$7
+    local LOCAL_UPSTREAM_IP=$8
+    local LOCAL_UPSTREAM_PORT=${9}
+    local LOCAL_UPSTREAM_WEIGHT=${10}
+    local LOCAL_UPSTREAM_HC_PATH=${11}
+    local LOCAL_UPSTREAM_IS_GRPC=${12}
 
     log "create_service_route_upstream() ${LOCAL_UPSTREAM_IS_GRPC}"
 
-	log "CREATE PROXY ${LOCAL_PROXY_NAME}"
-	
+    log "CREATE PROXY ${LOCAL_PROXY_NAME}"
+    
     create_proxy ${LOCAL_ADMIN_HOST_URL} ${LOCAL_PROXY_NAME}
-	
-	log "CREATE SERVICE ${LOCAL_SERVICE_NAME}"
-	
+    
+    log "CREATE SERVICE ${LOCAL_SERVICE_NAME}"
+    
     create_service ${ADMIN_HOST_URL} ${LOCAL_SERVICE_NAME} ${LOCAL_SERVICE_FQDN}
 
-	log "CREATE ROUTE "
-	
+    log "CREATE ROUTE "
+    
     create_route ${LOCAL_ADMIN_HOST_URL} ${LOCAL_SERVICE_NAME} ${LOCAL_ROUTE_NAME} ${LOCAL_ROUTE_PREFIX}
-	
-	log "CREATE UPSTREAM - IP:${LOCAL_UPSTREAM_IP} PORT:${LOCAL_UPSTREAM_PORT}"
-	
+    
+    log "CREATE UPSTREAM - IP:${LOCAL_UPSTREAM_IP} PORT:${LOCAL_UPSTREAM_PORT}"
+    
     create_upstream ${LOCAL_ADMIN_HOST_URL} ${LOCAL_UPSTREAM_NAME} ${LOCAL_UPSTREAM_IP} ${LOCAL_UPSTREAM_PORT} ${LOCAL_UPSTREAM_WEIGHT} ${LOCAL_UPSTREAM_HC_PATH} ${LOCAL_UPSTREAM_IS_GRPC}
 
-	log "ATTACH upstream to route"
-	
-	curl -s -X POST ${LOCAL_ADMIN_HOST_URL}/service/${LOCAL_SERVICE_NAME}/route/${LOCAL_ROUTE_NAME}/upstream/${LOCAL_UPSTREAM_NAME} | ${PIPE_TO}
-	
-	log "Dump service ${LOCAL_SERVICE_NAME}"
-	
-	curl -s ${LOCAL_ADMIN_HOST_URL}/service/dump/${LOCAL_SERVICE_NAME} | ${PIPE_TO}
+    log "ATTACH upstream to route"
+    
+    curl -s -X POST ${LOCAL_ADMIN_HOST_URL}/service/${LOCAL_SERVICE_NAME}/route/${LOCAL_ROUTE_NAME}/upstream/${LOCAL_UPSTREAM_NAME} | ${PIPE_TO}
+    
+    log "Dump service ${LOCAL_SERVICE_NAME}"
+    
+    curl -s ${LOCAL_ADMIN_HOST_URL}/service/dump/${LOCAL_SERVICE_NAME} | ${PIPE_TO}
 }
 
 associate_proxy_service() {
-	local LOCAL_ADMIN_HOST_URL=$1
-	local LOCAL_PROXY_NAME=$2
-	local LOCAL_SERVICE_NAME=$3
+    local LOCAL_ADMIN_HOST_URL=$1
+    local LOCAL_PROXY_NAME=$2
+    local LOCAL_SERVICE_NAME=$3
 
-	log "Associate SERVICE ${LOCAL_SERVICE_NAME} <--> PROXY ${LOCAL_PROXY_NAME}"
-	curl -s -X POST ${LOCAL_ADMIN_HOST_URL}/proxy/${LOCAL_PROXY_NAME}/service/${LOCAL_SERVICE_NAME} | ${PIPE_TO}
+    log "Associate SERVICE ${LOCAL_SERVICE_NAME} <--> PROXY ${LOCAL_PROXY_NAME}"
+    curl -s -X POST ${LOCAL_ADMIN_HOST_URL}/proxy/${LOCAL_PROXY_NAME}/service/${LOCAL_SERVICE_NAME} | ${PIPE_TO}
 }
 
 associate_secret_to_service() {
-	local LOCAL_ADMIN_HOST_URL=$1
-	local LOCAL_SERVICE_NAME=$2
-	local LOCAL_SECRET_NAME=$3
+    local LOCAL_ADMIN_HOST_URL=$1
+    local LOCAL_SERVICE_NAME=$2
+    local LOCAL_SECRET_NAME=$3
 
-	log "Associate SECRET ${LOCAL_SECRET_NAME} <--> SERVICE ${LOCAL_SERVICE_NAME}"
-	curl -s -X POST ${LOCAL_ADMIN_HOST_URL}/service/${LOCAL_SERVICE_NAME}/secret/${LOCAL_SECRET_NAME} | ${PIPE_TO}
+    log "Associate SECRET ${LOCAL_SECRET_NAME} <--> SERVICE ${LOCAL_SERVICE_NAME}"
+    curl -s -X POST ${LOCAL_ADMIN_HOST_URL}/service/${LOCAL_SERVICE_NAME}/secret/${LOCAL_SECRET_NAME} | ${PIPE_TO}
 }
 
-
 create_secret() {
-	local LOCAL_ADMIN_HOST_URL=$1
-	local LOCAL_SECRET_NAME=$2
-	local LOCAL_SECRET_KEY_FILE=$3
-	local LOCAL_SECRET_CERT_FILE=$4
+    local LOCAL_ADMIN_HOST_URL=$1
+    local LOCAL_SECRET_NAME=$2
+    local LOCAL_SECRET_KEY_FILE=$3
+    local LOCAL_SECRET_CERT_FILE=$4
 
-	log "CREATE SECRET ${LOCAL_SECRET_NAME}"
-	curl -s -X POST ${LOCAL_ADMIN_HOST_URL}/secret -d "Secret_Name"="${LOCAL_SECRET_NAME}" | ${PIPE_TO}
+    log "CREATE SECRET ${LOCAL_SECRET_NAME}"
+    curl -s -X POST ${LOCAL_ADMIN_HOST_URL}/secret -d "Secret_Name"="${LOCAL_SECRET_NAME}" | ${PIPE_TO}
 
-	log "curl -s -X POST ${LOCAL_ADMIN_HOST_URL}/secret/${LOCAL_SECRET_NAME}/key -F 'Secret_key=@'${LOCAL_SECRET_KEY_FILE}"
-	curl -s -X POST ${LOCAL_ADMIN_HOST_URL}/secret/${LOCAL_SECRET_NAME}/key -F 'Secret_key=@'${LOCAL_SECRET_KEY_FILE} | ${PIPE_TO}
+    log "curl -s -X POST ${LOCAL_ADMIN_HOST_URL}/secret/${LOCAL_SECRET_NAME}/key -F 'Secret_key=@'${LOCAL_SECRET_KEY_FILE}"
+    curl -s -X POST ${LOCAL_ADMIN_HOST_URL}/secret/${LOCAL_SECRET_NAME}/key -F 'Secret_key=@'${LOCAL_SECRET_KEY_FILE} | ${PIPE_TO}
 
-	log "curl -s -X POST ${LOCAL_ADMIN_HOST_URL}/secret/${LOCAL_SECRET_NAME}/cert -F 'Secret_cert=@'${LOCAL_SECRET_CERT_FILE}"
-	curl -s -X POST ${LOCAL_ADMIN_HOST_URL}/secret/${LOCAL_SECRET_NAME}/cert -F 'Secret_cert=@'${LOCAL_SECRET_CERT_FILE} | ${PIPE_TO}
+    log "curl -s -X POST ${LOCAL_ADMIN_HOST_URL}/secret/${LOCAL_SECRET_NAME}/cert -F 'Secret_cert=@'${LOCAL_SECRET_CERT_FILE}"
+    curl -s -X POST ${LOCAL_ADMIN_HOST_URL}/secret/${LOCAL_SECRET_NAME}/cert -F 'Secret_cert=@'${LOCAL_SECRET_CERT_FILE} | ${PIPE_TO}
 }
 
 list_secret() {
-	local LOCAL_ADMIN_HOST_URL=$1
-	curl -s ${LOCAL_ADMIN_HOST_URL}/secret | ${PIPE_TO}
+    local LOCAL_ADMIN_HOST_URL=$1
+    curl -s ${LOCAL_ADMIN_HOST_URL}/secret | ${PIPE_TO}
 }
 
 delete_service_route_upstream() {
-	local LOCAL_ADMIN_HOST_URL=$1
-	local LOCAL_PROXY_NAME=$2
-	local LOCAL_SERVICE_NAME=$3
-	local LOCAL_ROUTE_NAME=$4
-	local LOCAL_UPSTREAM_NAME=$5
-	local LOCAL_SECRET_NAME=$6
-	local LOCAL_UPSTREAM_NAME2=$7
-	local LOCAL_UPSTREAM_NAME3=$8
-	local LOCAL_ROUTE_NAME_GRPC=$9
+    local LOCAL_ADMIN_HOST_URL=$1
+    local LOCAL_PROXY_NAME=$2
+    local LOCAL_SERVICE_NAME=$3
+    local LOCAL_ROUTE_NAME=$4
+    local LOCAL_UPSTREAM_NAME=$5
+    local LOCAL_SECRET_NAME=$6
+    local LOCAL_UPSTREAM_NAME2=$7
+    local LOCAL_UPSTREAM_NAME3=$8
+    local LOCAL_ROUTE_NAME_GRPC=$9
 
-	log "curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/service/${LOCAL_SERVICE_NAME}/route/${LOCAL_ROUTE_NAME}/upstream/${LOCAL_UPSTREAM_NAME}"
-	curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/service/${LOCAL_SERVICE_NAME}/route/${LOCAL_ROUTE_NAME}/upstream/${LOCAL_UPSTREAM_NAME} | ${PIPE_TO}
+    log "curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/service/${LOCAL_SERVICE_NAME}/route/${LOCAL_ROUTE_NAME}/upstream/${LOCAL_UPSTREAM_NAME}"
+    curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/service/${LOCAL_SERVICE_NAME}/route/${LOCAL_ROUTE_NAME}/upstream/${LOCAL_UPSTREAM_NAME} | ${PIPE_TO}
 
-	log "curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/service/${LOCAL_SERVICE_NAME}/route/${LOCAL_ROUTE_NAME}/upstream/${LOCAL_UPSTREAM_NAME2}"
-	curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/service/${LOCAL_SERVICE_NAME}/route/${LOCAL_ROUTE_NAME}/upstream/${LOCAL_UPSTREAM_NAME2} | ${PIPE_TO}
+    log "curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/service/${LOCAL_SERVICE_NAME}/route/${LOCAL_ROUTE_NAME}/upstream/${LOCAL_UPSTREAM_NAME2}"
+    curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/service/${LOCAL_SERVICE_NAME}/route/${LOCAL_ROUTE_NAME}/upstream/${LOCAL_UPSTREAM_NAME2} | ${PIPE_TO}
 
-	log "curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/service/${LOCAL_SERVICE_NAME}/route/${GRPC_ROUTE_NAME}/upstream/${LOCAL_UPSTREAM_NAME3}"
-	curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/service/${LOCAL_SERVICE_NAME}/route/${GRPC_ROUTE_NAME}/upstream/${LOCAL_UPSTREAM_NAME3} | ${PIPE_TO}
+    log "curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/service/${LOCAL_SERVICE_NAME}/route/${GRPC_ROUTE_NAME}/upstream/${LOCAL_UPSTREAM_NAME3}"
+    curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/service/${LOCAL_SERVICE_NAME}/route/${GRPC_ROUTE_NAME}/upstream/${LOCAL_UPSTREAM_NAME3} | ${PIPE_TO}
 
-	log "curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/upstream/${LOCAL_UPSTREAM_NAME}"
-	curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/upstream/${LOCAL_UPSTREAM_NAME} | ${PIPE_TO}
+    log "curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/upstream/${LOCAL_UPSTREAM_NAME}"
+    curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/upstream/${LOCAL_UPSTREAM_NAME} | ${PIPE_TO}
 
-	log "curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/upstream/${LOCAL_UPSTREAM_NAME2}"
-	curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/upstream/${LOCAL_UPSTREAM_NAME2} | ${PIPE_TO}
+    log "curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/upstream/${LOCAL_UPSTREAM_NAME2}"
+    curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/upstream/${LOCAL_UPSTREAM_NAME2} | ${PIPE_TO}
 
-	log "curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/upstream/${LOCAL_UPSTREAM_NAME3}"
-	curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/upstream/${LOCAL_UPSTREAM_NAME3} | ${PIPE_TO}
+    log "curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/upstream/${LOCAL_UPSTREAM_NAME3}"
+    curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/upstream/${LOCAL_UPSTREAM_NAME3} | ${PIPE_TO}
 
-	log "curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/service/${LOCAL_SERVICE_NAME}/route/${LOCAL_ROUTE_NAME}"
-	curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/service/${LOCAL_SERVICE_NAME}/route/${LOCAL_ROUTE_NAME} | ${PIPE_TO}
+    log "curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/service/${LOCAL_SERVICE_NAME}/route/${LOCAL_ROUTE_NAME}"
+    curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/service/${LOCAL_SERVICE_NAME}/route/${LOCAL_ROUTE_NAME} | ${PIPE_TO}
 
-	log "curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/service/${LOCAL_SERVICE_NAME}/route/${GRPC_ROUTE_NAME}"
-	curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/service/${LOCAL_SERVICE_NAME}/route/${GRPC_ROUTE_NAME} | ${PIPE_TO}
+    log "curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/service/${LOCAL_SERVICE_NAME}/route/${GRPC_ROUTE_NAME}"
+    curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/service/${LOCAL_SERVICE_NAME}/route/${GRPC_ROUTE_NAME} | ${PIPE_TO}
 
-	log "curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/service/${LOCAL_SERVICE_NAME}/secret/${LOCAL_SECRET_NAME}"
-	curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/service/${LOCAL_SERVICE_NAME}/secret/${LOCAL_SECRET_NAME} | ${PIPE_TO}
+    log "curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/service/${LOCAL_SERVICE_NAME}/secret/${LOCAL_SECRET_NAME}"
+    curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/service/${LOCAL_SERVICE_NAME}/secret/${LOCAL_SECRET_NAME} | ${PIPE_TO}
 
-	log "curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/secret/${LOCAL_SECRET_NAME}"
-	curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/secret/${LOCAL_SECRET_NAME} | ${PIPE_TO}
+    log "curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/secret/${LOCAL_SECRET_NAME}"
+    curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/secret/${LOCAL_SECRET_NAME} | ${PIPE_TO}
 
-	log "curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/proxy/${LOCAL_PROXY_NAME}/service/${SERVICE_NAME}"
-	curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/proxy/${LOCAL_PROXY_NAME}/service/${SERVICE_NAME} | ${PIPE_TO}
+    log "curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/proxy/${LOCAL_PROXY_NAME}/service/${SERVICE_NAME}"
+    curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/proxy/${LOCAL_PROXY_NAME}/service/${SERVICE_NAME} | ${PIPE_TO}
 
-	log "curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/service/${LOCAL_SERVICE_NAME}"
-	curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/service/${LOCAL_SERVICE_NAME} | ${PIPE_TO}
+    log "curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/service/${LOCAL_SERVICE_NAME}"
+    curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/service/${LOCAL_SERVICE_NAME} | ${PIPE_TO}
 
-	log "curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/proxy/${LOCAL_PROXY_NAME}"
+    log "curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/proxy/${LOCAL_PROXY_NAME}"
 
-	curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/proxy/${LOCAL_PROXY_NAME} | ${PIPE_TO}
+    curl -s -X DELETE ${LOCAL_ADMIN_HOST_URL}/proxy/${LOCAL_PROXY_NAME} | ${PIPE_TO}
 }
 
 PIPE_TO=""
@@ -298,52 +521,52 @@ PIPE_TO=""
 check_jq() {
     if hash jq 2>/dev/null; then
         PIPE_TO="jq"
-	elif hash python 2>/dev/null; then
-		PIPE_TO="python -m json.tool"
-	else
-		PIPE_TO="cat"
+    elif hash python 2>/dev/null; then
+        PIPE_TO="python -m json.tool"
+    else
+        PIPE_TO="cat"
     fi
 }
 
 check_py() {
     if hash python 2>/dev/null; then
-		echo "Checking for python..."
-	else
-		echo "Python not found. Please install python first"
-		exit 1
+        echo "Checking for python..."
+    else
+        echo "Python not found. Please install python first"
+        exit 1
     fi
 }
 
 check_curl() {
     if hash curl 2>/dev/null; then
-		echo "Checking for curl..."
-	else
-		echo "curl not found. Please install curl first"
-		exit 1
+        echo "Checking for curl..."
+    else
+        echo "curl not found. Please install curl first"
+        exit 1
     fi
 }
 
 dump_proxy() {
-	local LOCAL_ADMIN_HOST_URL=$1
+    local LOCAL_ADMIN_HOST_URL=$1
     
-	log "Dump proxies"
-	curl -s ${LOCAL_ADMIN_HOST_URL}/proxy/dump | ${PIPE_TO}
+    log "Dump proxies"
+    curl -s ${LOCAL_ADMIN_HOST_URL}/proxy/dump | ${PIPE_TO}
 }
 
 dump_service() {
-	local LOCAL_ADMIN_HOST_URL=$1
-	local LOCAL_SERVICE_NAME=$2
+    local LOCAL_ADMIN_HOST_URL=$1
+    local LOCAL_SERVICE_NAME=$2
 
-	log "Dump service"
-	curl -s ${LOCAL_ADMIN_HOST_URL}/service/dump/${LOCAL_SERVICE_NAME} | ${PIPE_TO}
+    log "Dump service"
+    curl -s ${LOCAL_ADMIN_HOST_URL}/service/dump/${LOCAL_SERVICE_NAME} | ${PIPE_TO}
 }
 
 dump_upstream() {
-	local LOCAL_ADMIN_HOST_URL=$1
-	local LOCAL_UPSTREAM_NAME=$2
+    local LOCAL_ADMIN_HOST_URL=$1
+    local LOCAL_UPSTREAM_NAME=$2
 
-	log "Dump upstream"
-	curl -s ${LOCAL_ADMIN_HOST_URL}/upstream/${LOCAL_UPSTREAM_NAME} | ${PIPE_TO}
+    log "Dump upstream"
+    curl -s ${LOCAL_ADMIN_HOST_URL}/upstream/${LOCAL_UPSTREAM_NAME} | ${PIPE_TO}
 }
 
 start_server() {
@@ -406,47 +629,115 @@ check_curl
 
 case "$1" in
     create-http)
-		create_service_route_upstream ${ADMIN_HOST_URL} ${PROXY_NAME} ${SERVICE_NAME} ${SERVICE_FQDN} ${ROUTE_NAME} ${ROUTE_PREFIX} ${UPSTREAM_NAME} ${UPSTREAM_IP} ${UPSTREAM_PORT} ${UPSTREAM_WEIGHT} ${UPSTREAM_HC_PATH}
+        U_PROTO="http"
+        create_service_route_upstream ${ADMIN_HOST_URL} ${PROXY_NAME} ${SERVICE_NAME} ${SERVICE_FQDN} ${ROUTE_NAME} ${ROUTE_PREFIX} ${UPSTREAM_NAME} ${UPSTREAM_IP} ${UPSTREAM_PORT} ${UPSTREAM_WEIGHT} ${UPSTREAM_HC_PATH} ${U_PROTO}
         associate_proxy_service ${ADMIN_HOST_URL} ${PROXY_NAME} ${SERVICE_NAME}
+        create_global_lua_filter ${ADMIN_HOST_URL} ${SERVICE_NAME} ${LUA_FILTER_NAME} ${LUA_FILTER_TYPE} "${LUA_SCRIPT}"
+        attach_global_filter ${ADMIN_HOST_URL} ${SERVICE_NAME} ${LUA_FILTER_NAME}
+        create_route_rl_filter ${ADMIN_HOST_URL} ${SERVICE_NAME} ${ROUTE_NAME} ${RL_FILTER_NAME} ${RL_FILTER_TYPE} "${RL_FILTER_CONFIG}"
+        attach_route_filter ${ADMIN_HOST_URL} ${SERVICE_NAME} ${ROUTE_NAME} ${RL_FILTER_NAME}
+        create_global_config ${ADMIN_HOST_URL} ${SERVICE_NAME} ${GLOBALCONFIG_NAME} ${GLOBALCONFIG_TYPE} "${GLOBAL_CONFIG}"
+        attach_globalconfig ${ADMIN_HOST_URL} ${GLOBALCONFIG_NAME}
             ;;
     send-http-traffic)
-		send_traffic_http ${SERVICE_FQDN}
+        send_traffic_http ${SERVICE_FQDN}
             ;;
 
-	create-https)
-		create_service_route_upstream ${ADMIN_HOST_URL} ${PROXY_NAME} ${SERVICE_NAME} ${SERVICE_FQDN} ${ROUTE_NAME} ${ROUTE_PREFIX} ${UPSTREAM_NAME} ${UPSTREAM_IP} ${UPSTREAM_PORT} ${UPSTREAM_WEIGHT} ${UPSTREAM_HC_PATH}
+    create-https)
+        U_PROTO="http"
+        create_service_route_upstream ${ADMIN_HOST_URL} ${PROXY_NAME} ${SERVICE_NAME} ${SERVICE_FQDN} ${ROUTE_NAME} ${ROUTE_PREFIX} ${UPSTREAM_NAME} ${UPSTREAM_IP} ${UPSTREAM_PORT} ${UPSTREAM_WEIGHT} ${UPSTREAM_HC_PATH} ${U_PROTO}
         associate_proxy_service ${ADMIN_HOST_URL} ${PROXY_NAME} ${SERVICE_NAME}
-		create_key_cert ${SERVICE_FQDN} ${SECRET_KEY_FILE} ${SECRET_CERT_FILE}
-		create_secret ${ADMIN_HOST_URL} ${SECRET_NAME} ${SECRET_KEY_FILE} ${SECRET_CERT_FILE}
+        create_key_cert ${SERVICE_FQDN} ${SECRET_KEY_FILE} ${SECRET_CERT_FILE}
+        create_secret ${ADMIN_HOST_URL} ${SECRET_NAME} ${SECRET_KEY_FILE} ${SECRET_CERT_FILE}
         associate_secret_to_service ${ADMIN_HOST_URL} ${SERVICE_NAME} ${SECRET_NAME}
+        create_global_lua_filter ${ADMIN_HOST_URL} ${SERVICE_NAME} ${LUA_FILTER_NAME} ${LUA_FILTER_TYPE} "${LUA_SCRIPT}"
+        attach_global_filter ${ADMIN_HOST_URL} ${SERVICE_NAME} ${LUA_FILTER_NAME}
+        create_route_rl_filter ${ADMIN_HOST_URL} ${SERVICE_NAME} ${ROUTE_NAME} ${RL_FILTER_NAME} ${RL_FILTER_TYPE} "${RL_FILTER_CONFIG}"
+        attach_route_filter ${ADMIN_HOST_URL} ${SERVICE_NAME} ${ROUTE_NAME} ${RL_FILTER_NAME}
+        create_global_config ${ADMIN_HOST_URL} ${SERVICE_NAME} ${GLOBALCONFIG_NAME} ${GLOBALCONFIG_TYPE} "${GLOBAL_CONFIG}"
+        attach_globalconfig ${ADMIN_HOST_URL} ${GLOBALCONFIG_NAME}
+
             ;;
     send-https-traffic)
-		send_traffic ${SERVICE_FQDN}
+        send_traffic ${SERVICE_FQDN}
             ;;
 
-	create-grpc)
+    create-grpc)
+        U_PROTO="grpc"
         create_proxy ${LOCAL_ADMIN_HOST_URL} ${LOCAL_PROXY_NAME}
         create_service ${ADMIN_HOST_URL} ${SERVICE_NAME} ${SERVICE_FQDN_GRPC}
         create_route ${ADMIN_HOST_URL} ${SERVICE_NAME} ${GRPC_ROUTE_NAME} ${GRPC_ROUTE_PREFIX}
-		create_and_associate_upstream ${ADMIN_HOST_URL} ${UPSTREAM_NAME_3} ${UPSTREAM_IP_3} ${UPSTREAM_PORT_3} ${UPSTREAM_WEIGHT_3} ${UPSTREAM_HC_PATH_3} ${SERVICE_NAME} ${GRPC_ROUTE_NAME} "grpc"
+        create_and_associate_upstream ${ADMIN_HOST_URL} ${UPSTREAM_NAME_3} ${UPSTREAM_IP_3} ${UPSTREAM_PORT_3} ${UPSTREAM_WEIGHT_3} ${UPSTREAM_HC_PATH_3} ${SERVICE_NAME} ${GRPC_ROUTE_NAME} ${U_PROTO}
         associate_proxy_service ${ADMIN_HOST_URL} ${PROXY_NAME} ${SERVICE_NAME}
+        create_global_lua_filter ${ADMIN_HOST_URL} ${SERVICE_NAME} ${LUA_FILTER_NAME} ${LUA_FILTER_TYPE} "${LUA_SCRIPT}"
+        attach_global_filter ${ADMIN_HOST_URL} ${SERVICE_NAME} ${LUA_FILTER_NAME}
+        create_route_rl_filter ${ADMIN_HOST_URL} ${SERVICE_NAME} ${ROUTE_NAME} ${RL_FILTER_NAME} ${RL_FILTER_TYPE} "${RL_FILTER_CONFIG}"
+        attach_route_filter ${ADMIN_HOST_URL} ${SERVICE_NAME} ${ROUTE_NAME} ${RL_FILTER_NAME}
+        create_global_config ${ADMIN_HOST_URL} ${SERVICE_NAME} ${GLOBALCONFIG_NAME} ${GLOBALCONFIG_TYPE} "${GLOBAL_CONFIG}"
+        attach_globalconfig ${ADMIN_HOST_URL} ${GLOBALCONFIG_NAME}
+
             ;;
      send-grpc-traffic)
          echo "grpc_client_server -role client -host 127.0.0.1 -port 8080 -id 3"
             ;;
     start-server)
-		start_server 50051
+        start_server 50051
             ;;
     start-server-grpc)
          echo "grpc_client_server -role server -host 127.0.0.1 -port 50053"
             ;;
     show)
-		dump_proxy ${ADMIN_HOST_URL}
+        dump_proxy ${ADMIN_HOST_URL}
             ;;
     delete)
-		delete_service_route_upstream ${ADMIN_HOST_URL} ${PROXY_NAME} ${SERVICE_NAME} ${ROUTE_NAME} ${UPSTREAM_NAME} ${SECRET_NAME} ${UPSTREAM_NAME_2} ${UPSTREAM_NAME_3} ${GRPC_ROUTE_NAME}
+        detach_global_filter ${ADMIN_HOST_URL} ${SERVICE_NAME} ${LUA_FILTER_NAME}
+        delete_global_filter ${ADMIN_HOST_URL} ${SERVICE_NAME} ${LUA_FILTER_NAME}
+        detach_route_filter ${ADMIN_HOST_URL} ${SERVICE_NAME} ${ROUTE_NAME} ${RL_FILTER_NAME}
+        delete_route_filter ${ADMIN_HOST_URL} ${SERVICE_NAME} ${ROUTE_NAME} ${RL_FILTER_NAME}
+        detach_globalconfig ${ADMIN_HOST_URL} ${GLOBALCONFIG_NAME}
+        delete_globalconfig ${ADMIN_HOST_URL} ${GLOBALCONFIG_NAME}
+        delete_service_route_upstream ${ADMIN_HOST_URL} ${PROXY_NAME} ${SERVICE_NAME} ${ROUTE_NAME} ${UPSTREAM_NAME} ${SECRET_NAME} ${UPSTREAM_NAME_2} ${UPSTREAM_NAME_3} ${GRPC_ROUTE_NAME}
+            ;;
+
+    create-lua)
+        create_global_lua_filter ${ADMIN_HOST_URL} ${SERVICE_NAME} ${LUA_FILTER_NAME} ${LUA_FILTER_TYPE} "${LUA_SCRIPT}"
+            ;;
+    attach-lua)
+        attach_global_filter ${ADMIN_HOST_URL} ${SERVICE_NAME} ${LUA_FILTER_NAME}
+            ;;
+    detach-lua)
+        detach_global_filter ${ADMIN_HOST_URL} ${SERVICE_NAME} ${LUA_FILTER_NAME}
+            ;;
+    delete-lua)
+        delete_global_filter ${ADMIN_HOST_URL} ${SERVICE_NAME} ${LUA_FILTER_NAME}
+            ;;
+
+    create-rl-filter)
+        create_route_rl_filter ${ADMIN_HOST_URL} ${SERVICE_NAME} ${ROUTE_NAME} ${RL_FILTER_NAME} ${RL_FILTER_TYPE} "${RL_FILTER_CONFIG}"
+            ;;
+    attach-rl-filter)
+        attach_route_filter ${ADMIN_HOST_URL} ${SERVICE_NAME} ${ROUTE_NAME} ${RL_FILTER_NAME}
+            ;;
+    detach-rl-filter)
+        detach_route_filter ${ADMIN_HOST_URL} ${SERVICE_NAME} ${ROUTE_NAME} ${RL_FILTER_NAME}
+            ;;
+    delete-rl-filter)
+        delete_route_filter ${ADMIN_HOST_URL} ${SERVICE_NAME} ${ROUTE_NAME} ${RL_FILTER_NAME}
+            ;;
+
+    create-globalconfig)
+        create_global_config ${ADMIN_HOST_URL} ${SERVICE_NAME} ${GLOBALCONFIG_NAME} ${GLOBALCONFIG_TYPE} "${GLOBAL_CONFIG}"
+            ;;
+    attach-globalconfig)
+        attach_globalconfig ${ADMIN_HOST_URL} ${GLOBALCONFIG_NAME}
+            ;;
+    detach-globalconfig)
+        detach_globalconfig ${ADMIN_HOST_URL} ${GLOBALCONFIG_NAME}
+            ;;
+    delete-globalconfig)
+        delete_globalconfig ${ADMIN_HOST_URL} ${GLOBALCONFIG_NAME}
             ;;
     *)
-            usage
-            exit 1
+        usage
+        exit 1
 esac
