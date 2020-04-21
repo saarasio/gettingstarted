@@ -678,13 +678,17 @@ case "$1" in
 
             ;;
      send-grpc-traffic)
-         echo "grpc_client_server -role client -host 127.0.0.1 -port 8080 -id 3"
+         echo "build gRPC client/server example first"
+         echo "mkdir -p build && cd build && cmake .. && make && cd .."
+         echo "./bin/grpc_client_server -role client -host 127.0.0.1 -port 8080 -id 3"
             ;;
     start-server)
         start_server 50051
             ;;
     start-server-grpc)
-         echo "grpc_client_server -role server -host 127.0.0.1 -port 50053"
+         echo "build gRPC client/server example first"
+         echo "mkdir -p build && cd build && cmake .. && make && cd .."
+         echo "./bin/grpc_client_server -role server -host 127.0.0.1 -port 50053"
             ;;
     show)
         dump_proxy ${ADMIN_HOST_URL}
