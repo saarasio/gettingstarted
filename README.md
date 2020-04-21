@@ -45,6 +45,3 @@ Checking for curl...
         ./gs show
         
         
-        
-        
-         create-https       - create service, secret, route, upstream
